@@ -1,20 +1,19 @@
-# Volvo Recharge (Full EV) plugin
+# Volvo API plugin
 #
 # Author: akamming
 #
 """
-<plugin key="VolvoEV" name="Volvo Recharge (Full EV)" author="akamming" version="0.1.0" wikilink="http://www.domoticz.com/wiki/plugins/plugin.html" externallink="https://github.com/akamming/Domoticz_VolvoRecharge_Plugin">
+<plugin key="Volvo" name="Volvo API" author="akamming" version="0.1.0" wikilink="http://www.domoticz.com/wiki/plugins/plugin.html" externallink="https://github.com/akamming/Domoticz_VolvoRecharge_Plugin">
     <description>
-        <h2>Volvo Recharge (Full EV) plugin</h2><br/>
-        domoticzwrapper around Volvo API (https://developer.volvocars.com/apis/) so your car sensors can be integrated into your home automation use cases.
+        <h2>Volvo API plugin</h2><br/>
         <h3>Features</h3>
         <ul style="list-style-type:square">
-            <li>recharge status (https://developer.volvocars.com/apis/energy/endpoints/recharge-status/)</li>
             <li>doors, windows and lock status, including locking and unlocking of doors (https://developer.volvocars.com/apis/connected-vehicle/endpoints/doors-windows-locks/)</li>
             <li>start/stop climatisation (https://developer.volvocars.com/apis/connected-vehicle/endpoints/climate/)</li>
+            <li>Warnings (https://developer.volvocars.com/apis/connected-vehicle/v2/endpoints/warnings/)</li>
+            <li>Diagnostics (https://developer.volvocars.com/apis/connected-vehicle/v2/endpoints/diagnostics/)</li>
+            <li>Engine information (https://developer.volvocars.com/apis/connected-vehicle/v2/endpoints/engine/)</li>
         </ul>
-        <h3>Devices</h3>
-        pls look at the above links in API, Volvo does a much better deal describing it than i can
         <h3>Configuration</h3>
         <ul style="list-style-type:square">
             <li>Use your Volvo on Call Username/password, which is linked to your vehicle.</li>
@@ -27,8 +26,17 @@
         <param field="Username" label="Volvo On Call Username" required="true"/>
         <param field="Password" label="Volvo On Call Password" required="true" password="true"/>
         <param field="Mode1" label="Primary VCC API Key" required="true"/>
-        <param field="Mode2" label="update interval in secs" required="true" default="900"/>
+        <param field="Mode2" label="update interval in secs" required="true" default="90"/>
         <param field="Mode3" label="VIN (optional)"/>
+        <param field="Mode4" label="FuelType">
+            <options>
+                <option label="Electric"/>
+                <option label="Petrol/Electric (Plugin-Hybird)"/>
+                <option label="Petrol"/>
+                <option label="Diesel"/>
+                <option label="None"/>
+            </options>
+        </param>
         <param field="Mode5" label="ABRP apikey:token (optional)"/>
         <param field="Mode6" label="Debug" width="150px">
             <options>
@@ -52,6 +60,7 @@ import requests
 import json
 import datetime
 from datetime import timezone
+from datetime import datetime
 import time
 from math import sin, cos, sqrt, atan2, radians
 
@@ -295,20 +304,41 @@ def CheckVehicleDetails(vin):
 
     Debug("CheckVehicleDetails called")
     try:
-        vehicle = VolvoAPI( "https://api.volvocars.com/connected-vehicle/v2/vehicles/"+vin, "application/json")
-        Info("retreived a "+str(vehicle["data"]["descriptions"]["model"])+", color "+str(vehicle["data"]["externalColour"])+", model year "+str(vehicle["data"]["modelYear"]))
+        vehicle = VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin, "application/json")
+        Info("Retrieved a " + str(vehicle["data"]["descriptions"]["model"]) + ", color " + str(
+            vehicle["data"]["externalColour"]) + ", model year " + str(vehicle["data"]["modelYear"]))
+        
         if vehicle:
-            if vehicle["data"]["fuelType"]=="ELECTRIC":
-                Info("Setting BatteryCapacity to "+str(vehicle["data"]["batteryCapacityKWH"]))
-                batteryPackSize=vehicle["data"]["batteryCapacityKWH"]
+            fuel_type = vehicle["data"]["fuelType"]
+            
+            if fuel_type == "ELECTRIC":
+                Info("Setting BatteryCapacity to " + str(vehicle["data"]["batteryCapacityKWH"]))
+                batteryPackSize = vehicle["data"]["batteryCapacityKWH"]
+                
+            elif fuel_type == "PETROL/ELECTRIC":
+                Info("Vehicle is hybrid (PETROL/ELECTRIC).")
+                # Additional handling for hybrid vehicles if needed
+                
+            elif fuel_type == "PETROL":
+                Info("Vehicle runs on Petrol.")
+                # Additional handling for petrol vehicles if needed
+                
+            elif fuel_type == "DIESEL":
+                Info("Vehicle runs on Diesel.")
+                # Additional handling for diesel vehicles if needed
+                
+            elif fuel_type == "NONE":
+                Error("Selected VIN has no fuel type information.")
+                # Additional handling for cases where fuel type is not specified
+                
             else:
-                Error("Selected vin is not an EV, not supported by this plugin")
-                vin=None
-
+                Error("Selected VIN is not supported by this plugin due to unknown fuel type.")
+                vin = None
+                
     except Exception as error:
-        Debug("CheckVehicleDEtails failed:")
+        Debug("CheckVehicleDetails failed:")
         Debug(error)
-        vin=None
+        vin = None
 
 def GetVin():
     global vin
@@ -348,129 +378,153 @@ def GetVin():
         vin=None
 
 
-def UpdateSensor(vn,idx,name,tp,subtp,options,nv,sv):
+def UpdateSensor(vn, idx, name, tp, subtp, options, nv, sv):
     if (not vn in Devices) or (not idx in Devices[vn].Units):
         Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, Type=tp, Subtype=subtp, DeviceID=vn, Options=options, Used=False).Create()
-    Debug("Changing from + "+str(Devices[vin].Units[idx].nValue)+","+str(Devices[vin].Units[idx].sValue)+" to "+str(nv)+","+str(sv))
-    if str(sv)!=Devices[vin].Units[idx].sValue:
-        Devices[vin].Units[idx].nValue = int(nv)
-        Devices[vin].Units[idx].sValue = sv
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("General/Custom Sensor ("+Devices[vin].Units[idx].Name+")")
-    else:
-        Debug("not updating General/Custom Sensor ("+Devices[vin].Units[idx].Name+")")
+    Debug("Changing from " + str(Devices[vn].Units[idx].nValue) + "," + str(Devices[vn].Units[idx].sValue) + " to " + str(nv) + "," + str(sv))
+    Devices[vn].Units[idx].nValue = int(nv)
+    Devices[vn].Units[idx].sValue = sv
+    Devices[vn].Units[idx].Update(Log=True)
+    Domoticz.Log("General/Custom Sensor (" + Devices[vn].Units[idx].Name + ")")
 
-def UpdateSelectorSwitch(vn,idx,name,options,nv,sv):
+def UpdateSelectorSwitch(vn, idx, name, options, nv, sv):
+    if vn not in Devices or idx not in Devices[vn].Units:
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, TypeName="Selector Switch", DeviceID=vn, Options=options, Used=False).Create()
+    
+    # Retrieve the device unit
+    unit = Devices[vn].Units[idx]
+    
+    # Check if the current value and desired value are different
+    if nv != unit.nValue or sv != unit.sValue:
+        # Update the device unit values
+        unit.nValue = nv
+        unit.sValue = sv
+        unit.Touch()
+        Domoticz.Log("Selector Switch (" + unit.Name + ") updated")
+    else:
+        Debug("Not updating Selector Switch (" + unit.Name + ")")
+
+def UpdateSwitch(vn, idx, name, nv, sv):
+    Debug("UpdateSwitch(" + str(vn) + "," + str(idx) + "," + str(name) + "," + str(nv) + "," + str(sv) + " called")
     if (not vn in Devices) or (not idx in Devices[vn].Units):
-        Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, TypeName="Selector Switch", DeviceID=vn, Options=options, Used=False).Create()
-    if nv!=Devices[vin].Units[idx].nValue:
-        Devices[vin].Units[idx].nValue = int(nv)
-        Devices[vin].Units[idx].sValue = sv
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Selector Switch ("+Devices[vin].Units[idx].Name+")")
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, Type=244, Subtype=73, DeviceID=vn, Used=False).Create()
+    Debug("Changing from " + str(Devices[vn].Units[idx].nValue) + "," + Devices[vn].Units[idx].sValue + " to " + str(nv) + "," + str(sv))
+    Devices[vn].Units[idx].nValue = int(nv)
+    Devices[vn].Units[idx].sValue = sv
+    Devices[vn].Units[idx].Update(Log=True)
+    Domoticz.Log("On/Off Switch (" + Devices[vn].Units[idx].Name + ")")
+
+def UpdateSwitch(vn, idx, name, nv, sv):
+    Debug("UpdateSwitch(" + str(vn) + "," + str(idx) + "," + str(name) + "," + str(nv) + "," + str(sv) + " called")
+    if vn not in Devices or idx not in Devices[vn].Units:
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, Type=113, Switchtype=3, DeviceID=vn, Used=False).Create()
+    
+    # Retrieve the device unit
+    unit = Devices[vn].Units[idx]
+    
+    Debug("Changing from " + str(unit.nValue) + "," + unit.sValue + " to " + str(nv) + "," + str(sv))
+    
+    # Check if the current value and desired value are different
+    if nv != unit.nValue or sv != unit.sValue:
+        # Update the device unit values
+        unit.Update(nValue=int(nv), sValue=sv)
+        Domoticz.Log("RFXMeter Counter (" + unit.Name + ") updated to value: " + str(nv))
     else:
-        Debug("Not Updating Selector Switch ("+Devices[vin].Units[idx].Name+")")
+        Debug("Not updating RFXMeter Counter (" + unit.Name + ")")
 
-
-def UpdateSwitch(vn,idx,name,nv,sv):
-    Debug ("UpdateSwitch("+str(vn)+","+str(idx)+","+str(name)+","+str(nv)+","+str(sv)+" called")
-    if (not vn in Devices) or (not idx in Devices[vn].Units):
-        Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, Type=244, Subtype=73, DeviceID=vn, Used=False).Create()
-    if (Devices[vin].Units[idx].nValue==nv and Devices[vin].Units[idx].sValue==sv):
-        Debug("Switch status unchanged, not updating "+Devices[vin].Units[idx].Name)
-    else:
-        Debug("Changing from + "+str(Devices[vin].Units[idx].nValue)+","+Devices[vin].Units[idx].sValue+" to "+str(nv)+","+str(sv))
-        Devices[vin].Units[idx].nValue = int(nv)
-        Devices[vin].Units[idx].sValue = sv
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("On/Off Switch ("+Devices[vin].Units[idx].Name+")")
-
-
-def UpdateDoorOrWindow(vin,idx,name,value):
-    Debug ("UpdateDoorOrWindow("+str(vin)+","+str(idx)+","+str(name)+","+str(value)+") called")
+def UpdateDoorOrWindow(vin, idx, name, value):
+    Debug("UpdateDoorOrWindow(" + str(vin) + "," + str(idx) + "," + str(name) + "," + str(value) + ") called")
     if (not vin in Devices) or (not idx in Devices[vin].Units):
-        Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, Type=244, Subtype=73, Switchtype=11, DeviceID=vin, Used=False).Create()
-    if value=="OPEN" and Devices[vin].Units[idx].nValue==0:
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, Type=244, Subtype=73, Switchtype=11, DeviceID=vin, Used=False).Create()
+    if value == "OPEN":
         Devices[vin].Units[idx].nValue = 1
         Devices[vin].Units[idx].sValue = "Open"
         Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Door/Window Contact ("+Devices[vin].Units[idx].Name+")")
-    elif value=="CLOSED" and Devices[vin].Units[idx].nValue==1:
+        Domoticz.Log("Door/Window Contact (" + Devices[vin].Units[idx].Name + ")")
+    elif value == "CLOSED":
         Devices[vin].Units[idx].nValue = 0
         Devices[vin].Units[idx].sValue = "Closed"
         Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Door/Window Contact ("+Devices[vin].Units[idx].Name+")")
+        Domoticz.Log("Door/Window Contact (" + Devices[vin].Units[idx].Name + ")")
     else:
-        Debug("Door/Windows status unchanged not updating "+Devices[vin].Units[idx].Name)
-    
+        Debug("Door/Windows status unchanged not updating " + Devices[vin].Units[idx].Name)
 
-def UpdateLock(vin,idx,name,value):
-    Debug ("UpdateLock("+str(vin)+","+str(idx)+","+str(name)+","+str(value)+") called")
-    if (not vin in Devices) or (not idx in Devices[vin].Units):
-        Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, Type=244, Subtype=73, Switchtype=19, DeviceID=vin, Used=False).Create()
-    if value=="LOCKED" and Devices[vin].Units[idx].nValue==0:
-        Devices[vin].Units[idx].nValue = 1
-        Devices[vin].Units[idx].sValue = "Locked"
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Door Lock ("+Devices[vin].Units[idx].Name+")")
-    elif value=="UNLOCKED" and Devices[vin].Units[idx].nValue==1:
-        Devices[vin].Units[idx].nValue = 0
-        Devices[vin].Units[idx].sValue = "Unlocked"
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Door Lock ("+Devices[vin].Units[idx].Name+")")
-    else:
-        Debug("Lock status unchanged, not updating "+Devices[vin].Units[idx].Name)
+def UpdateLock(vin, idx, name, value):
+    Debug("UpdateLock(" + str(vin) + "," + str(idx) + "," + str(name) + "," + str(value) + ") called")
     
-
-def UpdateOdoMeter(vn,idx,name,value):
-    options = {"ValueQuantity": "Custom", "ValueUnits": "km"}
-    if (not vn in Devices) or (not idx in Devices[vn].Units):
-        Domoticz.Unit(Name=Parameters["Name"]+"-"+name, Unit=idx, Type=113, Switchtype=3, DeviceID=vin, Options=options,Used=False).Create()
-    Debug("Changing from + "+str(Devices[vin].Units[idx].nValue)+","+Devices[vin].Units[idx].sValue+" to "+str(value))
-    if value!=Devices[vin].Units[idx].nValue:
-        Devices[vin].Units[idx].nValue = int(value) 
-        Devices[vin].Units[idx].sValue = value
-        Devices[vin].Units[idx].Update(Log=True)
-        Domoticz.Log("Counter ("+Devices[vin].Units[idx].Name+")")
+    # Check if the device exists, if not, create it
+    if (vin not in Devices) or (idx not in Devices[vin].Units):
+        Debug("Creating device: " + Parameters["Name"] + "-" + name)
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, Type=244, Subtype=73, Switchtype=19, DeviceID=vin, Used=False).Create()
+    
+    # Update the lock status
+    if value == "LOCKED":
+        nValue = 1
+        sValue = "Locked"
+    elif value == "UNLOCKED":
+        nValue = 0
+        sValue = "Unlocked"
     else:
-        Debug("not updating Counter ("+Devices[vin].Units[idx].Name+")")
+        # Handle unexpected values
+        Debug("Unexpected lock status value: " + value)
+        return
+    
+    try:
+        Debug("Before updating: nValue=" + str(Devices[vin].Units[idx].nValue) + ", sValue=" + Devices[vin].Units[idx].sValue)
+        Devices[vin].Units[idx].Update(nValue=nValue, sValue=sValue, Log=True)
+        Debug("After updating: nValue=" + str(Devices[vin].Units[idx].nValue) + ", sValue=" + Devices[vin].Units[idx].sValue)
+        Domoticz.Log("Door Lock (" + Devices[vin].Units[idx].Name + ") updated")
+    except Exception as e:
+        Error("Failed to update lock status:")
+        Error(str(e))
+
+def UpdateOdoMeter(vn, idx, name, value):
+    options = {'ValueQuantity': 'Custom', 'ValueUnits': 'km'}
+    if vn not in Devices or idx not in Devices[vn].Units:
+        Domoticz.Unit(Name=Parameters["Name"] + "-" + name, Unit=idx, Type=113, Switchtype=3, DeviceID=vin, Options=options, Used=False).Create()
+    Debug("Changing from " + str(Devices[vn].Units[idx].nValue) + ", " + Devices[vn].Units[idx].sValue + " to " + str(value))
+    Devices[vn].Units[idx].nValue = int(value)
+    Devices[vn].Units[idx].sValue = str(value) + ";" + datetime.now().strftime("%Y-%m-%d")
+    Devices[vn].Units[idx].Update(Log=True)
+    Domoticz.Log("RFXMeter Counter (" + Devices[vn].Units[idx].Name + ") updated to value: " + str(value))
 
 def GetOdoMeter():
     Debug("GetOdoMeter() Called")
     
-    odometer=VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/"+vin+"/odometer","application/json")
+    odometer = VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/"+vin+"/odometer","application/json")
     if odometer:
         Debug(json.dumps(odometer))
-        value=int(odometer["data"]["odometer"]["value"])
-        Debug("odometer="+str(value))
-        UpdateOdoMeter(vin,ODOMETER,"Odometer",value)
-
+        value = int(odometer["data"]["odometer"]["value"])
+        Debug("Retrieved odometer value: " + str(value))
+        UpdateOdoMeter(vin, ODOMETER, "Odometer", value)
+    else:
+        Debug("Failed to retrieve odometer value")
 
 def GetDoorWindowAndLockStatus():
     Debug("GetDoorAndLockStatus() Called")
     
-    doors=VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/"+vin+"/doors","application/json")
+    doors = VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin + "/doors", "application/json")
     if doors:
         Debug(json.dumps(doors))
-        UpdateDoorOrWindow(vin,HOOD,"Hood",doors["data"]["hood"]["value"])
-        UpdateDoorOrWindow(vin,TAILGATE,"Tailgate",doors["data"]["tailgate"]["value"])
-        UpdateDoorOrWindow(vin,FRONTLEFTDOOR,"FrontLeftDoor",doors["data"]["frontLeftDoor"]["value"])
-        UpdateDoorOrWindow(vin,FRONTRIGHTDOOR,"FrontRightDoor",doors["data"]["frontRightDoor"]["value"])
-        UpdateDoorOrWindow(vin,REARLEFTDOOR,"RearLeftDoor",doors["data"]["rearLeftDoor"]["value"])
-        UpdateDoorOrWindow(vin,REARRIGHTDOOR,"RearRightDoor",doors["data"]["rearRightDoor"]["value"])
-        UpdateDoorOrWindow(vin,TANKLID,"TankLid",doors["data"]["tankLid"]["value"])
-        UpdateLock(vin,CARLOCKED,"centralLock",doors["data"]["centralLock"]["value"])
+        UpdateDoorOrWindow(vin, HOOD, "Hood", doors["data"]["hood"]["value"])
+        UpdateDoorOrWindow(vin, TAILGATE, "Tailgate", doors["data"]["tailgate"]["value"])
+        UpdateDoorOrWindow(vin, FRONTLEFTDOOR, "FrontLeftDoor", doors["data"]["frontLeftDoor"]["value"])
+        UpdateDoorOrWindow(vin, FRONTRIGHTDOOR, "FrontRightDoor", doors["data"]["frontRightDoor"]["value"])
+        UpdateDoorOrWindow(vin, REARLEFTDOOR, "RearLeftDoor", doors["data"]["rearLeftDoor"]["value"])
+        UpdateDoorOrWindow(vin, REARRIGHTDOOR, "RearRightDoor", doors["data"]["rearRightDoor"]["value"])
+        UpdateDoorOrWindow(vin, TANKLID, "TankLid", doors["data"]["tankLid"]["value"])
+        UpdateLock(vin, CARLOCKED, "centralLock", doors["data"]["centralLock"]["value"])
     else:
         Error("Updating Doors failed")
 
-    windows=VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/"+vin+"/windows","application/json")
+    windows = VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin + "/windows", "application/json")
     if windows:
         Debug(json.dumps(windows))
-        UpdateDoorOrWindow(vin,FRONTLEFTWINDOW,"FrontLeftWindow",windows["data"]["frontLeftWindow"]["value"])
-        UpdateDoorOrWindow(vin,FRONTRIGHTWINDOW,"FrontRightWindow",windows["data"]["frontRightWindow"]["value"])
-        UpdateDoorOrWindow(vin,REARLEFTWINDOW,"RearLeftWindow",windows["data"]["rearLeftWindow"]["value"])
-        UpdateDoorOrWindow(vin,REARRIGHTWINDOW,"RearRightWindow",windows["data"]["rearRightWindow"]["value"])
-        UpdateDoorOrWindow(vin,SUNROOF,"SunRoof",windows["data"]["sunroof"]["value"])
+        UpdateDoorOrWindow(vin, FRONTLEFTWINDOW, "FrontLeftWindow", windows["data"]["frontLeftWindow"]["value"])
+        UpdateDoorOrWindow(vin, FRONTRIGHTWINDOW, "FrontRightWindow", windows["data"]["frontRightWindow"]["value"])
+        UpdateDoorOrWindow(vin, REARLEFTWINDOW, "RearLeftWindow", windows["data"]["rearLeftWindow"]["value"])
+        UpdateDoorOrWindow(vin, REARRIGHTWINDOW, "RearRightWindow", windows["data"]["rearRightWindow"]["value"])
+        UpdateDoorOrWindow(vin, SUNROOF, "SunRoof", windows["data"]["sunroof"]["value"])
     else:
         Error("Updating Windows failed")
 
@@ -674,129 +728,145 @@ def GetRechargeStatus():
     global batteryPackSize
 
     Debug("GetRechargeStatus() called")
-    RechargeStatus=VolvoAPI("https://api.volvocars.com/energy/v1/vehicles/"+vin+"/recharge-status","application/vnd.volvocars.api.energy.vehicledata.v1+json")
-    if RechargeStatus:
-        Debug(json.dumps(RechargeStatus))
+    try:
+        vehicle = VolvoAPI("https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin, "application/json")
+        if vehicle and vehicle["data"]["fuelType"] == "ELECTRIC":
+            RechargeStatus = VolvoAPI("https://api.volvocars.com/energy/v1/vehicles/" + vin + "/recharge-status",
+                                      "application/vnd.volvocars.api.energy.vehicledata.v1+json")
+            if RechargeStatus:
+                Debug(json.dumps(RechargeStatus))
 
-        #update Remaining Range Device
-        UpdateSensor(vin,REMAININGRANGE,"electricRange",243,31,{'Custom':'1;km'},
-                     int(RechargeStatus["data"]["electricRange"]["value"]),
-                     float(RechargeStatus["data"]["electricRange"]["value"]))
+                # update Remaining Range Device
+                UpdateSensor(vin, REMAININGRANGE, "electricRange", 243, 31, {'Custom': '1;km'},
+                             int(RechargeStatus["data"]["electricRange"]["value"]),
+                             float(RechargeStatus["data"]["electricRange"]["value"]))
 
+                # update Percentage Device
+                UpdateSensor(vin, BATTERYCHARGELEVEL, "batteryChargeLevel", 243, 6, None,
+                             float(RechargeStatus["data"]["batteryChargeLevel"]["value"]),
+                             float(RechargeStatus["data"]["batteryChargeLevel"]["value"]))
 
-        #update Percentage Device
-        UpdateSensor(vin,BATTERYCHARGELEVEL,"batteryChargeLevel",243,6,None,
-                     float(RechargeStatus["data"]["batteryChargeLevel"]["value"]),
-                     float(RechargeStatus["data"]["batteryChargeLevel"]["value"]))
+                # update Fullrange Device
+                CalculatedRange = float(RechargeStatus["data"]["electricRange"]["value"]) * 100 / float(
+                    RechargeStatus["data"]["batteryChargeLevel"]["value"])
+                UpdateSensor(vin, FULLRANGE, "fullRange", 243, 31, {'Custom': '1;km'},
+                             int(CalculatedRange),
+                             "{:.1f}".format(CalculatedRange))
 
-        #update Fullrange Device
-        CalculatedRange=float(RechargeStatus["data"]["electricRange"]["value"]) * 100 / float(RechargeStatus["data"]["batteryChargeLevel"]["value"])
-        UpdateSensor(vin,FULLRANGE,"fullRange",243,31,{'Custom':'1;km'},
-                     int(CalculatedRange),
-                     "{:.1f}".format(CalculatedRange))
+                # update EstimatedEfficiency Device
+                estimatedEfficiency = (batteryPackSize * float(
+                    RechargeStatus["data"]["batteryChargeLevel"]["value"])) / float(
+                    RechargeStatus["data"]["electricRange"]["value"])
+                UpdateSensor(vin, ESTIMATEDEFFICIENCY, "estimatedEfficiency", 243, 31, {'Custom': '1;kWh/100km'},
+                             int(estimatedEfficiency),
+                             "{:.1f}".format(estimatedEfficiency))
 
-        #update EstimatedEfficiency Device
-        estimatedEfficiency=(batteryPackSize*float(RechargeStatus["data"]["batteryChargeLevel"]["value"]))  / float(RechargeStatus["data"]["electricRange"]["value"])
-        UpdateSensor(vin,ESTIMATEDEFFICIENCY,"estimatedEfficiency",243,31,{'Custom':'1;kWh/100km'},
-                     int(estimatedEfficiency),
-                     "{:.1f}".format(estimatedEfficiency))
+                # update Remaining ChargingTime Device
+                UpdateSensor(vin, ESTIMATEDCHARGINGTIME, "estimatedChargingTime", 243, 31, {'Custom': '1;min'},
+                             int(RechargeStatus["data"]["estimatedChargingTime"]["value"]),
+                             float(RechargeStatus["data"]["estimatedChargingTime"]["value"]))
 
+                # Calculate Charging Connect Status value
+                connstatus = RechargeStatus["data"]["chargingConnectionStatus"]["value"]
+                newValue = 0
+                if connstatus == "CONNECTION_STATUS_DISCONNECTED":
+                    newValue = 0
+                elif connstatus == "CONNECTION_STATUS_CONNECTED_AC":
+                    newValue = 10
+                elif connstatus == "CONNECTION_STATUS_CONNECTED_DC":
+                    newValue = 20
+                elif connstatus == "CONNECTION_STATUS_UNSPECIFIED":
+                    newValue = 30
+                else:
+                    newValue = 30
 
-        #update Remaining ChargingTime Device
-        UpdateSensor(vin,ESTIMATEDCHARGINGTIME,"estimatedChargingTime",243,31,{'Custom':'1;min'},
-                     int(RechargeStatus["data"]["estimatedChargingTime"]["value"]),
-                     float(RechargeStatus["data"]["estimatedChargingTime"]["value"]))
-     
-        #Calculate Charging Connect Status value
-        connstatus=RechargeStatus["data"]["chargingConnectionStatus"]["value"] 
-        newValue=0
-        if connstatus=="CONNECTION_STATUS_DISCONNECTED":
-            newValue=0
-        elif connstatus=="CONNECTION_STATUS_CONNECTED_AC":
-            newValue=10
-        elif connstatus=="CONNECTION_STATUS_CONNECTED_DC":
-            newValue=20
-        elif connstatus=="CONNECTION_STATUS_UNSPECIFIED":
-            newValue=30
+                # update selector switch for Charging Connection Status
+                options = {"LevelActions": "|||",
+                           "LevelNames": "Disconnected|ACConnected|DCConnected|Unspecified",
+                           "LevelOffHidden": "false",
+                           "SelectorStyle": "1"}
+                UpdateSelectorSwitch(vin, CHARGINGCONNECTIONSTATUS, "chargingConnectionStatus", options,
+                                     int(newValue),
+                                     float(newValue))
+
+                # Calculate Charging system Status value
+                chargestatus = RechargeStatus["data"]["chargingSystemStatus"]["value"]
+                newValue = 0
+                if chargestatus == "CHARGING_SYSTEM_IDLE":
+                    newValue = 0
+                elif chargestatus == "CHARGING_SYSTEM_CHARGING":
+                    newValue = 10
+                elif chargestatus == "CHARGING_SYSTEM_FAULT":
+                    newValue = 20
+                elif chargestatus == "CHARGING_SYSTEM_UNSPECIFIED":
+                    newValue = 30
+                else:
+                    newValue = 30
+
+                # update selector switch for Charging Connection Status
+                options = {"LevelActions": "|||",
+                           "LevelNames": "Idle|Charging|Fault|Unspecified",
+                           "LevelOffHidden": "false",
+                           "SelectorStyle": "1"}
+                UpdateSelectorSwitch(vin, CHARGINGSYSTEMSTATUS, "chargingSystemStatus", options, int(newValue),
+                                     float(newValue))
         else:
-            newValue=30
-
-        #update selector switch for Charging Connection Status
-        options = {"LevelActions": "|||",
-                  "LevelNames": "Disconnected|ACConnected|DCConnected|Unspecified",
-                  "LevelOffHidden": "false",
-                  "SelectorStyle": "1"}
-        UpdateSelectorSwitch(vin,CHARGINGCONNECTIONSTATUS,"chargingConnectionStatus",options,
-                     int(newValue),
-                     float(newValue))
-
-        #Calculate Charging system Status value
-        chargestatus=RechargeStatus["data"]["chargingSystemStatus"]["value"] 
-        newValue=0
-        if chargestatus=="CHARGING_SYSTEM_IDLE":
-            newValue=0
-        elif chargestatus=="CHARGING_SYSTEM_CHARGING":
-            newValue=10
-        elif chargestatus=="CHARGING_SYSTEM_FAULT":
-            newValue=20
-        elif chargestatus=="CHARGING_SYSTEM_UNSPECIFIED":
-            newValue=30
-        else:
-            newValue=30
-
-        #update selector switch for Charging Connection Status
-        options = {"LevelActions": "|||",
-                  "LevelNames": "Idle|Charging|Fault|Unspecified",
-                  "LevelOffHidden": "false",
-                  "SelectorStyle": "1"}
-        UpdateSelectorSwitch(vin,CHARGINGSYSTEMSTATUS,"chargingSystemStatus",options, int(newValue), float(newValue))
-    else:
-        Error("Updating Recharge Status failed")
-
-def DistanceBetweenCoords(coords1,coords2):
-    # Approximate radius of earth in km
-    R = 6373.0
-
-    lat1 = radians(float(coords1[0]))
-    lon1 = radians(float(coords1[1]))
-    lat2 = radians(float(coords2[0]))
-    lon2 = radians(float(coords2[1]))
-
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-
-    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))
-
-    distance = R * c
-
-    Debug=("Result: ", distance)
-    return distance
+            Info("Vehicle is not electric, RechargeStatus not updated.")
+    except Exception as e:
+        Error("Exception occurred during updating Recharge Status: {}".format(str(e)))
 
 def GetLocation():
+    def DistanceBetweenCoords(coords1, coords2):
+        # Approximate radius of earth in km
+        R = 6373.0
+
+        lat1 = radians(float(coords1[0]))
+        lon1 = radians(float(coords1[1]))
+        lat2 = radians(float(coords2[0]))
+        lon2 = radians(float(coords2[1]))
+
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
+
+        a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+        distance = R * c
+
+        Debug("Result: " + str(distance))
+        return distance
+
     Debug("GetLocation() called")
-    Location=VolvoAPI("https://api.volvocars.com/location/v1/vehicles/"+vin+"/location","application/json")
+    Location = VolvoAPI("https://api.volvocars.com/location/v1/vehicles/" + vin + "/location", "application/json")
     if Location:
         Debug(json.dumps(Location))
         Debug("Location is " + str(Location["data"]["geometry"]["coordinates"][0]))
-        UpdateSensor(vin,LONGITUDE,"Longitude",243,31,{'Custom':'1;lon'}, int(Location["data"]["geometry"]["coordinates"][0]), Location["data"]["geometry"]["coordinates"][0])
-        UpdateSensor(vin,LATTITUDE,"Lattitude",243,31,{'Custom':'1;lat'}, int(Location["data"]["geometry"]["coordinates"][1]), Location["data"]["geometry"]["coordinates"][1])
-        UpdateSensor(vin,ALTITUDE,"Altitude",243,31,{'Custom':'1;alt'}, int(Location["data"]["geometry"]["coordinates"][2]), Location["data"]["geometry"]["coordinates"][2])
-        UpdateSensor(vin,HEADING,"Heading",243,31,{'Custom':'1;degrees'}, int(Location["data"]["properties"]["heading"]), str(Location["data"]["properties"]["heading"]))
-        if len(Settings["Location"])>0:
-            Debug ( "Domoticz location is "+Settings["Location"])
-            DomoticzLocation=Settings["Location"].split(";")
-            if len(DomoticzLocation)==2:
-                VolvoLocation=(Location["data"]["geometry"]["coordinates"][1],Location["data"]["geometry"]["coordinates"][0])
-                Distance2Home=DistanceBetweenCoords(DomoticzLocation, VolvoLocation)
-                Debug("Distance to volvo is "+str(Distance2Home))
-                UpdateSensor(vin,DISTANCE2HOME,"Distance2Home",243,31,{'Custom':'1;km'}, int(Distance2Home), str(Distance2Home))
+        UpdateSensor(vin, LONGITUDE, "Longitude", 243, 31, {'Custom': '1;lon'},
+                     int(Location["data"]["geometry"]["coordinates"][0]),
+                     Location["data"]["geometry"]["coordinates"][0])
+        UpdateSensor(vin, LATTITUDE, "Lattitude", 243, 31, {'Custom': '1;lat'},
+                     int(Location["data"]["geometry"]["coordinates"][1]),
+                     Location["data"]["geometry"]["coordinates"][1])
+        UpdateSensor(vin, ALTITUDE, "Altitude", 243, 31, {'Custom': '1;alt'},
+                     int(Location["data"]["geometry"]["coordinates"][2]),
+                     Location["data"]["geometry"]["coordinates"][2])
+        UpdateSensor(vin, HEADING, "Heading", 243, 31, {'Custom': '1;degrees'},
+                     int(Location["data"]["properties"]["heading"]),
+                     str(Location["data"]["properties"]["heading"]))
+        if len(Settings["Location"]) > 0:
+            Debug("Domoticz location is " + Settings["Location"])
+            DomoticzLocation = Settings["Location"].split(";")
+            if len(DomoticzLocation) == 2:
+                VolvoLocation = (Location["data"]["geometry"]["coordinates"][1],
+                                 Location["data"]["geometry"]["coordinates"][0])
+                Distance2Home = DistanceBetweenCoords(DomoticzLocation, VolvoLocation)
+                Debug("Distance to volvo is " + str(Distance2Home))
+                UpdateSensor(vin, DISTANCE2HOME, "Distance2Home", 243, 31, {'Custom': '1;km'}, int(Distance2Home),
+                             str(Distance2Home))
             else:
                 Debug("Invalid location entered in domoticz config")
         else:
             Debug("No location entered in domoticz config")
-
-
     else:
         Error("GetLocation failed")
 
@@ -903,25 +973,23 @@ def Heartbeat():
     else:
         Debug("No vin, do nothing")
 
-def HandleClimatizationCommand(vin,idx,command):
-    global climatizationstoptimestamp,climatizationoperationid
+def HandleClimatizationCommand(vin, idx, command):
+    global climatizationstoptimestamp, climatizationoperationid
 
     if refresh_token:
         url = "https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin + '/commands/climatization-start'
-        climatizationstoptimestamp=time.time()+30*60  #make sure we switch off after 30 mins
-        nv=1
-        
-        if command=='Off':
-            url = "https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin + '/commands/climatization-stop'
-            nv=0
-        
+        climatizationstoptimestamp = time.time() + 30 * 60  # make sure we switch off after 30 mins
+        nv = 1
 
+        if command == 'Off':
+            url = "https://api.volvocars.com/connected-vehicle/v2/vehicles/" + vin + '/commands/climatization-stop'
+            nv = 0
 
         try:
             Debug("URL: {}".format(url))
             status = requests.post(
                 url,
-                headers= {
+                headers={
                     "Content-Type": "application/json",
                     "vcc-api-key": vccapikey,
                     "Authorization": "Bearer " + access_token
@@ -935,18 +1003,18 @@ def HandleClimatizationCommand(vin,idx,command):
             sjson = json.dumps(status.json(), indent=4)
             Debug("\nResult JSON:")
             Debug(sjson)
-            if status.status_code==200:
-                if (status.json()["data"]["invokeStatus"]=="COMPLETED"):
-                    UpdateSwitch(vin,CLIMATIZATION,"Climatization",nv,command)
+            if status.status_code == 200:
+                if status.json()["data"]["invokeStatus"] == "COMPLETED":
+                    UpdateSwitch(vin, CLIMATIZATION, "Climatization", nv, command)
                 else:
-                    Error("climatization did not start/stop, API returned code "+status.json()["data"]["invokeStatus"])
+                    Error("Climatization did not start/stop, API returned code " + status.json()["data"][
+                        "invokeStatus"])
             else:
-                Error("climatizatation did not start/stop, webserver returned "+str(status.status_code)+", result: "+sjson)
+                Error("Climatization did not start/stop, webserver returned " + str(status.status_code) + ", result: " + sjson)
 
         except Exception as err:
-            Error("handleclimatization command failed:")
+            Error("Handle climatization command failed:")
             Error(err)
-
 
 def HandleLockCommand(vin,idx,command):
     global climatizationstoptimestamp,climatizationoperationid
@@ -987,7 +1055,6 @@ def HandleLockCommand(vin,idx,command):
         except Exception as error:
             Error("lock/unlock command failed:")
             Error(error)
-
 
 class BasePlugin:
     enabled = False
